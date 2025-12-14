@@ -88,3 +88,58 @@ def calculate_rolling_stats(returns_df, stock_ticker, factor_cols, window=60):
         results['Correlation_Regime'] = np.nan
 
     return results.reset_index(drop=True)
+
+@st.cache_data
+def calculate_volatility_profiles(full_df, stock_ticker, earnings_dates, window_days=30):
+    """
+    Calculates average realized volatility profiles (Total, Idio, Factor) around earnings events.
+    Returns a DataFrame with columns: ['Rel_Day', 'Total_Vol', 'Idio_Vol', 'Factor_Vol']
+    """
+    # Work on a copy and ensure sort
+    df = full_df.copy().sort_values('Date')
+    
+    # 1. Calculate Realized Volatility (21-day rolling, annualized)
+    # We use 21 days (~1 trading month) to be sensitive enough to moves but smooth enough.
+    # Scale by sqrt(252) to annualize.
+    
+    # Ensure cols exist
+    if 'Idiosyncratic_Return' not in df.columns or 'Factor_Return' not in df.columns:
+        return None
+
+    # Rolling Std Dev of Returns
+    df['Total_Vol'] = df[stock_ticker].rolling(21).std() * np.sqrt(252)
+    df['Idio_Vol'] = df['Idiosyncratic_Return'].rolling(21).std() * np.sqrt(252)
+    df['Factor_Vol'] = df['Factor_Return'].rolling(21).std() * np.sqrt(252)
+    
+    # Reset index for safe slicing
+    df = df.reset_index(drop=True)
+    
+    # 2. Extract Event Windows
+    profiles = []
+    
+    # Identify indices of earnings dates
+    # earnings_dates is likely a Series or list of Timestamps.
+    # df['Date'] is datetime64[ns]
+    event_indices = df[df['Date'].isin(earnings_dates)].index
+    
+    for idx in event_indices:
+        start = idx - window_days
+        end = idx + window_days + 1
+        
+        # Check bounds
+        if start < 0 or end > len(df):
+            continue
+            
+        slice_df = df.iloc[start:end].copy()
+        slice_df['Rel_Day'] = np.arange(-window_days, window_days + 1)
+        
+        profiles.append(slice_df[['Rel_Day', 'Total_Vol', 'Idio_Vol', 'Factor_Vol']])
+        
+    if not profiles:
+        return None
+        
+    # 3. Aggregate across all events
+    combined = pd.concat(profiles)
+    avg_profile = combined.groupby('Rel_Day')[['Total_Vol', 'Idio_Vol', 'Factor_Vol']].mean().reset_index()
+    
+    return avg_profile

@@ -8,10 +8,9 @@ from scipy.stats.mstats import winsorize
 # --- Page Config ---
 st.set_page_config(layout="wide", page_title="KR Capital: Earnings Dashboard")
 
-# --- Import Custom Modules ---
 from utils.data_loader import get_stock_list, load_data, process_data, get_event_window
-from utils.calculations import get_garch_forecast, calculate_rolling_stats
-from utils.visualizations import create_waterfall
+from utils.calculations import get_garch_forecast, calculate_rolling_stats, calculate_volatility_profiles
+from utils.visualizations import create_waterfall, plot_volatility_analysis
 from utils.ai_summary import get_available_models, generate_ai_summary
 
 # --- MAIN APP ---
@@ -240,6 +239,31 @@ def main():
                 st.info(f"Visualizing the top 5 active factors. Look for lines crossing or diverging at the vertical line (Earnings Date).")
             else:
                 st.warning("Insufficient beta data for rotation analysis.")
+
+        st.markdown("---")
+        
+        # --- Step 2b: Volatility Analysis ---
+        st.subheader("2b. Volatility Analysis (Fear Cycle)")
+        st.caption("Analyzing Realized Volatility behavior (21-Day Rolling) around earnings. Does risk accumulate before the event?")
+        
+        # Calculate Profiles
+        vol_profile = calculate_volatility_profiles(full_df, selected_stock, earnings_df['Earnings Date'], window_size)
+        
+        if vol_profile is not None:
+            fig_ramp, fig_comp = plot_volatility_analysis(vol_profile, selected_stock)
+            
+            col_vol1, col_vol2 = st.columns(2)
+            with col_vol1:
+                st.markdown("**1. The Fear Cycle (Total Volatility Ramp)**")
+                st.plotly_chart(fig_ramp, width="stretch")
+                st.caption("Higher peaks at T=0 indicate market stress/uncertainty pricing.")
+            
+            with col_vol2:
+                st.markdown("**2. Risk Composition (Idio vs. Market)**")
+                st.plotly_chart(fig_comp, width="stretch")
+                st.caption("Red Area = Stock-Specific Risk (Earnings Attention). Blue Area = General Market Noise.")
+        else:
+            st.info("Insufficient data to calculate volatility profiles.")
 
         st.markdown("---")
 
@@ -597,6 +621,8 @@ def main():
                     title=f"Historical Correlation of {selected_stock} with Risk Factors"
                 )
                 st.plotly_chart(fig_corr_bar, width="stretch")
+
+
 
     # --- Tab 2: Comparison ---
     with tab2:
