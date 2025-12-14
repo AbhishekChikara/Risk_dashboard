@@ -234,7 +234,7 @@ def main():
                                     title=f"Factor Beta Cycle: {'Pre-Earnings' if not has_post else 'Pre & Post Earnings'}",
                                     labels={'value': 'Factor Beta', 'variable': 'Factor'})
                 fig_cycle.add_vline(x=latest_event_date.timestamp() * 1000, line_dash="dash", line_color="white", annotation_text="Earnings")
-                st.plotly_chart(fig_cycle, use_container_width=True)
+                st.plotly_chart(fig_cycle, width="stretch")
                 
                 # Insight: Check for rotation (Crossing lines)
                 st.info(f"Visualizing the top 5 active factors. Look for lines crossing or diverging at the vertical line (Earnings Date).")
@@ -313,7 +313,7 @@ def main():
             fig_risk.add_trace(go.Bar(y=['Risk Source'], x=[pct_factor], name='Factor Risk', orientation='h', marker_color='#3366CC'))
             fig_risk.add_trace(go.Bar(y=['Risk Source'], x=[pct_idio], name='Specific Risk', orientation='h', marker_color='#DC3912'))
             fig_risk.update_layout(barmode='stack', title="Variance Decomposition", xaxis_tickformat='.0%', height=200, margin=dict(l=0, r=0, t=30, b=0))
-            st.plotly_chart(fig_risk, use_container_width=True)
+            st.plotly_chart(fig_risk, width="stretch")
             
         # Detailed Systematic Breakdown
         st.caption("Drivers of Systematic Risk")
@@ -340,7 +340,7 @@ def main():
                                  title="Top Factors Driving Systematic Risk",
                                  labels={'x': '% of Systematic Variance', 'y': 'Factor'})
             fig_drivers.update_layout(yaxis=dict(autorange="reversed"), xaxis_tickformat='.0%', height=300)
-            st.plotly_chart(fig_drivers, use_container_width=True)
+            st.plotly_chart(fig_drivers, width="stretch")
             
         st.markdown("---")
 
@@ -409,7 +409,7 @@ def main():
             trend_data = rolling_stats.iloc[-252:] 
             fig_trend = px.line(trend_data, x='Date', y='Rolling_Beta', height=150)
             fig_trend.update_layout(margin=dict(l=0, r=0, t=0, b=0), showlegend=False)
-            st.plotly_chart(fig_trend, use_container_width=True)
+            st.plotly_chart(fig_trend, width="stretch")
             
         st.markdown("---")
 
@@ -491,7 +491,7 @@ def main():
                               labels={'value': 'Cumulative Return', 'Rel_Day': 'Days Relative to Earnings'})
             
             fig_agg.add_vline(x=0, line_dash="dash", line_color="white", annotation_text="Announcement")
-            st.plotly_chart(fig_agg, use_container_width=True)
+            st.plotly_chart(fig_agg, width="stretch")
 
             st.markdown("---")
             
@@ -508,7 +508,7 @@ def main():
                                     labels={selected_stock: "Avg Abs Return"},
                                     color=selected_stock, color_continuous_scale="Blues")
                 fig_season.update_layout(yaxis_tickformat=".2%")
-                st.plotly_chart(fig_season, use_container_width=True)
+                st.plotly_chart(fig_season, width="stretch")
 
             with col_adv2:
                 # 2. Alpha vs Total Correlation Plot
@@ -518,7 +518,7 @@ def main():
                                       labels={selected_stock: 'Total T+1 Return', 'Idiosyncratic_Return': 'Idiosyncratic (Alpha)'},
                                       trendline="ols")
                 fig_corr.update_layout(xaxis_tickformat=".1%", yaxis_tickformat=".1%")
-                st.plotly_chart(fig_corr, use_container_width=True)
+                st.plotly_chart(fig_corr, width="stretch")
 
             # --- ENHANCED SECTION: Pre & Post-Event Patterns ---
             st.subheader("Pre & Post-Event Patterns (Anticipation & Drift)")
@@ -549,7 +549,7 @@ def main():
                     fig_pre_event = px.box(pre_event_df, y='Pre-Event Run-up', points="all",
                                            title=f"Distribution of Pre-Event Run-up (T-{window_size} to T-1)")
                     fig_pre_event.update_layout(yaxis_tickformat=".1%")
-                    st.plotly_chart(fig_pre_event, use_container_width=True)
+                    st.plotly_chart(fig_pre_event, width="stretch")
 
             with col_post:
                 # --- 2. Conditional Post-Earnings Drift ---
@@ -566,7 +566,7 @@ def main():
                     fig_cond_drift = px.bar(drift_analysis_df, x="Condition", y="Average Drift",
                                             color="Condition", title=f"Avg. Drift (T+2 to T+{window_size})")
                     fig_cond_drift.update_layout(yaxis_tickformat=".2%")
-                    st.plotly_chart(fig_cond_drift, use_container_width=True)
+                    st.plotly_chart(fig_cond_drift, width="stretch")
 
             # --- Original PEAD Scatter Plot for context ---
             if drift_data:
@@ -578,7 +578,7 @@ def main():
                 fig_drift.add_hline(y=0, line_dash="dash", line_color="gray")
                 fig_drift.add_vline(x=0, line_dash="dash", line_color="gray")
                 fig_drift.update_layout(xaxis_tickformat=".1%", yaxis_tickformat=".1%")
-                st.plotly_chart(fig_drift, use_container_width=True)
+                st.plotly_chart(fig_drift, width="stretch")
                 st.caption("Points in Top-Right/Bottom-Left quadrants indicate **Momentum** (Drift follows move). Top-Left/Bottom-Right indicate **Reversal**.")
 
             st.markdown("---")
@@ -596,7 +596,7 @@ def main():
                     orientation='h',
                     title=f"Historical Correlation of {selected_stock} with Risk Factors"
                 )
-                st.plotly_chart(fig_corr_bar, use_container_width=True)
+                st.plotly_chart(fig_corr_bar, width="stretch")
 
     # --- Tab 2: Comparison ---
     with tab2:
@@ -612,7 +612,7 @@ def main():
             date_a = pd.to_datetime(date_a_str)
             t1_a = full_df[full_df['Date'] == date_a + pd.Timedelta(days=1)]
             if not t1_a.empty:
-                st.plotly_chart(create_waterfall(t1_a.iloc[0], factor_cols, f"Attribution: {date_a_str}"), use_container_width=True)
+                st.plotly_chart(create_waterfall(t1_a.iloc[0], factor_cols, f"Attribution: {date_a_str}"), width="stretch")
         
         # --- Event B Selection ---
         with comp_col2:
@@ -620,7 +620,7 @@ def main():
             date_b = pd.to_datetime(date_b_str)
             t1_b = full_df[full_df['Date'] == date_b + pd.Timedelta(days=1)]
             if not t1_b.empty:
-                st.plotly_chart(create_waterfall(t1_b.iloc[0], factor_cols, f"Attribution: {date_b_str}"), use_container_width=True)
+                st.plotly_chart(create_waterfall(t1_b.iloc[0], factor_cols, f"Attribution: {date_b_str}"), width="stretch")
 
         st.markdown("---")
 
@@ -638,7 +638,7 @@ def main():
                 f"Event A ({date_a_str})": [f"{row_a[selected_stock]:.2%}", f"{row_a['Idiosyncratic_Return']:.2%}", f"{row_a['Factor_Return']:.2%}", f"{alpha_pct_a:.1%}"],
                 f"Event B ({date_b_str})": [f"{row_b[selected_stock]:.2%}", f"{row_b['Idiosyncratic_Return']:.2%}", f"{row_b['Factor_Return']:.2%}", f"{alpha_pct_b:.1%}"]
             }
-            st.dataframe(pd.DataFrame(comp_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(comp_data), width="stretch", hide_index=True)
 
         # --- ADDED: Cumulative Return Window Comparison ---
         st.subheader("Cumulative Return Window Comparison")
@@ -659,7 +659,7 @@ def main():
                                    title="Cumulative Performance During Event Windows",
                                    labels={'Rel_Day': 'Days Relative to Earnings', 'Cumulative Return': 'Cumulative Stock Return'})
             fig_cum_comp.add_vline(x=0, line_dash="dash", line_color="gray", annotation_text="Announcement")
-            st.plotly_chart(fig_cum_comp, use_container_width=True)
+            st.plotly_chart(fig_cum_comp, width="stretch")
 
     # --- Tab 3: Individual Deep Dive (Enhanced) ---
     with tab3:
@@ -674,7 +674,7 @@ def main():
                 
                 # 1. Return Attribution Waterfall
                 st.subheader(f"1. Return Attribution (T+1)")
-                st.plotly_chart(create_waterfall(row, factor_cols, ""), use_container_width=True)
+                st.plotly_chart(create_waterfall(row, factor_cols, ""), width="stretch")
 
                 # 2. Top Contributors Text
                 all_contribs = {col: row[f'Contrib_{col}'] for col in factor_cols}
@@ -702,7 +702,7 @@ def main():
                                             labels={selected_stock: 'Daily Return'})
                     fig_hist.add_vline(x=row[selected_stock], line_dash="dash", line_color="red", 
                                        annotation_text=f"Event: {row[selected_stock]:.2%}")
-                    st.plotly_chart(fig_hist, use_container_width=True)
+                    st.plotly_chart(fig_hist, width="stretch")
                 
                 with col_h2:
                     percentile = (full_df[selected_stock] < row[selected_stock]).mean() * 100
@@ -721,7 +721,7 @@ def main():
                                        title="Factor Loadings (Betas) During Event Window",
                                        labels={'value': 'Beta', 'Rel_Day': 'Days Relative to Earnings'})
                     fig_load.add_vline(x=0, line_dash="dash", line_color="white", annotation_text="Announcement")
-                    st.plotly_chart(fig_load, use_container_width=True)
+                    st.plotly_chart(fig_load, width="stretch")
 
                 st.markdown("---")
                 
@@ -772,7 +772,7 @@ def main():
                     
                     fig_beta.update_layout(title="Beta Stability Verification", xaxis_title="Days Relative to Earnings", yaxis_title="Beta")
                     fig_beta.add_vline(x=0, line_dash="dash", line_color="white")
-                    st.plotly_chart(fig_beta, use_container_width=True)
+                    st.plotly_chart(fig_beta, width="stretch")
                 else:
                     st.warning("Could not find 'Rolling_Beta' or 'Market_Load' columns for verification.")
 
