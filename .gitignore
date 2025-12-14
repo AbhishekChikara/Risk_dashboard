@@ -1,0 +1,14 @@
+# System files
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Data & Large Files
+*.pdf
+files/
+res/
+
+# Notebooks
+.ipynb_checkpoints/
