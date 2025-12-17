@@ -1,68 +1,80 @@
-# KR Capital: Earnings Dashboard
+# KR Capital: Strategic Earnings Dashboard
 
-A comprehensive quantitative dashboard for analyzing stock performance around earnings events. This tool allows Portfolio Managers to visualize return attribution, factor exposure, and volatility dynamics to make data-driven decisions.
+A professional-grade quantitative dashboard for analyzing stock behavior around earnings events. Designed for Portfolio Managers and Risk Officers to visualize return attribution, volatility dynamics, and generate AI-driven hedging strategies.
 
-## Features
+## 🚀 Key Features
 
-- **Aggregate Analysis**: View average absolute moves, idiosyncratic (alpha) contribution, and seasonality trends.
-- **Event Comparison**: Compare two specific earnings events side-by-side with waterfall attribution charts.
-- **Individual Deep Dive**: Detailed breakdown of a single event, including return attribution, historical context, and factor beta evolution.
-- **AI Summary**: Generate strategic post-earnings analysis reports using Google's Gemini AI.
-- **Factor Performance**: Analyze historical performance and correlations of underlying risk factors.
+### 1. Workflow Monitoring (Tab 0) & Volatility Analysis
+- **Volatility Ramp ("The Fear Cycle")**: Visualize how Implied Volatility rises into earnings (T-30 to T=0) and crushes post-event.
+- **Risk Composition**: Breakdown of Total Volatility into Idiosyncratic (Stock-Specific) vs Systematic (Market) components.
+- **Step-by-Step Workflow**: Track the loading, cleaning, and processing of factor data.
 
-## Installation
+### 2. Multi-Agent AI Strategy (Tab 4)
+- **Three Distinct Personas**:
+    - **🛡️ Risk Manager**: Focuses on "Kill Criteria", Magnitude Risk, and Downside Protection (Options/Collars). Uses **Event-Specific Idiosyncratic Ratios** to validate hedging strategy.
+    - **💼 Portfolio Manager**: Focuses on Upside/Downside Skew, Sizing, and "The Edge".
+    - **🔢 Quant Analyst**: Focuses on Statistical Significance (Sigma moves), Regimes, and Anomalies.
+- **Advanced Context Engine**: 
+    - **Win Rate**: Historical probability of positive reactions.
+    - **Drift Amplification**: Detects if post-earnings moves tend to "run" (Momentum) or reverse.
+    - **Market Regime**: Identifies "Crisis Correlation" vs "Stock Picker" environments.
 
-1.  **Clone the repository** (if applicable) or navigate to the project directory.
-2.  **Create a Conda environment** (recommended):
-    ```bash
-    conda create -n kr_capital python=3.11
-    conda activate kr_capital
-    ```
-3.  **Install dependencies**:
-    ```bash
-    pip install -r requirements.txt
-    ```
+### 3. Quantitative Deep Dives
+- **Waterfalls**: Attribution of returns to specific factors (Market, Semi, Value, Momentum).
+- **Event Comparison**: Side-by-side analysis of two historical quarters.
+- **Scenario Analysis**: Stress-test portfolio P&L against market shocks (e.g., "Tech Rally +5%").
 
-## Data Setup
+---
 
-The dashboard expects a specific directory structure for stock data. Ensure your project folder looks like this:
+## 🛠️ Data Infrastructure
 
+The project is now fully modularized for robustness and scale:
+- `main_file.py`: Streamlit entry point.
+- `utils/data_loader.py`: Robust CSV reading and pre-processing.
+- `utils/calculations.py`: Rolling statistics, GARCH volatility forecasting, and Event-Study metrics.
+- `utils/visualizations.py`: Plotly charts for waterfalls, ramps, and ramps.
+- `utils/ai_summary.py`: Prompt engineering and Gemini API integration.
+
+### File Structure
 ```
 project_root/
 ├── main_file.py
 ├── requirements.txt
+├── README.md
+├── utils/              <-- Core Logic
+│   ├── data_loader.py
+│   ├── calculations.py
+│   ├── visualizations.py
+│   └── ai_summary.py
 └── res/
-    └── [Stock_Ticker]/  (e.g., NVDA)
+    └── [Stock_Ticker]/ (e.g., NVDA)
         ├── 01_case_study_returns.csv
         ├── 02_case_study_factor_loadings.csv
         └── 03_case_study_earnings_dates.csv
 ```
 
--   **`res/`**: The main resource directory.
--   **`[Stock_Ticker]/`**: Create a subdirectory for each stock you want to analyze (e.g., `res/NVDA`, `res/AAPL`).
--   **CSV Files**: Inside each stock folder, you must have the three specific CSV files listed above.
+---
 
-## Usage
+## ⚡ Installation & Usage
 
-1.  **Run the Streamlit application**:
+1.  **Clone & Install**:
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+2.  **Run Dashboard**:
     ```bash
     streamlit run main_file.py
     ```
-2.  **Navigate**: Open the provided local URL in your web browser (usually `http://localhost:8501`).
-3.  **Select Stock**: Use the sidebar to select a stock from the available folders in `res/`.
-4.  **Explore**: Use the tabs to navigate between different analysis modules.
 
-## Configuration
+3.  **AI Configuration**:
+    - Enter your **Google Gemini API Key** in the **Sidebar**.
+    - Navigate to **Tab 4 (AI Summary)** to generate reports.
 
--   **Event Window**: Adjust the `Event Window (+/- Days)` slider in the sidebar to change the analysis period.
--   **Winsorization**: Use the "Advanced Settings" in the sidebar to winsorize returns and reduce the impact of outliers.
--   **AI Summary**: To use the "AI Summary" tab, you must provide a valid Google API Key in the sidebar input field.
+---
 
-## Requirements
+## 📊 Methodology Notes
 
-See `requirements.txt` for the full list of Python dependencies. Key libraries include:
--   `streamlit`
--   `pandas`
--   `plotly`
--   `google-generativeai`
--   `arch`
+- **Idiosyncratic Ratio**: We calculate this *specifically* for the earnings event window (T+1), as general 60-day stats often understate event risk.
+- **Drift Logic**: "Amplification" is flagged when the T+2 to T+5 move shares the same sign as the T+1 reaction.
+- **Volatility**: Forecasts use a GARCH(1,1) model on pre-event returns.
