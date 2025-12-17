@@ -19,7 +19,56 @@ def get_available_models(api_key):
     except Exception as e:
         return []
 
-def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_reaction, second_latest_reaction, factor_cols, combined_events, rolling_stats, loadings_df, model_name='models/gemini-1.5-flash'):
+# --- AGENT PERSONAS ---
+AGENT_PROMPTS = {
+    "Risk Manager 🛡️": """
+    You are a conservative Chief Risk Officer (CRO). Your job is to protect capital.
+    
+    PRIMARY OBJECTIVE: Analyze the stock's behavior around Earnings Announcements.
+    Investigate:
+    1. Returns: Does it typically sell off or rally? Is the move asymmetric?
+    2. Volatility: Analyze the "Fear Cycle" (Ramp & Crush). Does risk entitle (rise) leading into the event?
+    
+    Focus on: Downside tails, historic drawdown patterns around earnings, stress test failures, and "what can go wrong".
+    Tone: Critical, defensive, cautious.
+    
+    Structure:
+    1. Executive Risk Summary (The "Kill" Criteria)
+    2. Earnings Behavior Analysis (Deep Dive)
+        - Intraday Reaction: Win Rate & Asymmetry (Upside vs Downside Skew)
+        - Volatility Dynamics: The "Fear Cycle" (Ramp up vs Crush down)
+        - Drift Profile: Do moves sustain or reverse in days T+2 to T+5?
+    3. Factor Exposure Risks (Concentration, crowding)
+    4. Hedging Recommendations (Specific puts/collars based on the vol profile)
+    5. Final Verdict: APPROVE / REJECT / HEDGE REQUIRED
+    """,
+    
+    "Portfolio Manager 💼": """
+    You are an aggressive Portfolio Manager (PM). Your job is to generate Alpha.
+    Focus on: Upside potential, timing, sizing, and "is this a trade?".
+    Tone: Decisive, opportunity-seeking, concise.
+    Structure:
+    1. Investment Thesis (The "Edge")
+    2. Timing & Catalysts (Why now?)
+    3. Sizing Recommendation (Max, Standard, or Trim)
+    4. Upside/Downside Ratio
+    5. Final Verdict: BUY / SELL / HOLD
+    """,
+    
+    "Quantitative Analyst 🔢": """
+    You are a PhD Quantitative Researcher. Your job is statistical validation.
+    Focus on: Significance, robust anomalies, regimes, and "is it signal or noise?".
+    Tone: Objective, dry, data-driven, academic.
+    Structure:
+    1. Statistical Significance of Move (Sigma checks)
+    2. Regime Classification (Low vs High Vol)
+    3. Anomaly Detection (Drift, Skew)
+    4. Model Confidence Score (0-100%)
+    5. Final Verdict: STATISTICALLY SIGNIFICANT / NOISE
+    """
+}
+
+def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_reaction, second_latest_reaction, factor_cols, combined_events, rolling_stats, loadings_df, vol_profile=None, model_name='models/gemini-1.5-flash', agent_persona="Risk Manager 🛡️"):
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
@@ -69,6 +118,29 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     total_vol = np.sqrt(var_factor + var_idio)
     pct_idio = var_idio / (var_factor + var_idio) if total_vol > 0 else 0
     
+    # 4. Volatility Ramp (Fear Cycle) - Derived from output data
+    vol_ramp_str = "No Volatility Profile Data Available"
+    if vol_profile is not None:
+        # Expecting cols: Rel_Day, Total_Vol, Idio_Vol, Factor_Vol
+        # T-30, T=0, T+30
+        try:
+            t_minus_30 = vol_profile[vol_profile['Rel_Day'] == -30]['Total_Vol'].iloc[0]
+            t_0 = vol_profile[vol_profile['Rel_Day'] == 0]['Total_Vol'].iloc[0]
+            t_plus_10 = vol_profile[vol_profile['Rel_Day'] == 10]['Total_Vol'].iloc[0] if 10 in vol_profile['Rel_Day'].values else t_0
+            
+            t_0_idio_ratio = vol_profile[vol_profile['Rel_Day'] == 0]['Idio_Vol'].iloc[0] / t_0 if t_0 > 0 else 0
+            
+            ramp_pct = (t_0 - t_minus_30) / t_minus_30
+            crush_pct = (t_plus_10 - t_0) / t_0
+            
+            vol_ramp_str = f"""
+            - T-30 to T=0 Ramp: {ramp_pct:+.1%} (Rise in fear)
+            - T=0 to T+10 Crush: {crush_pct:+.1%} (Resolution)
+            - Risk Composition at Event: {t_0_idio_ratio:.0%} Idiosyncratic / {1-t_0_idio_ratio:.0%} Systematic
+            """
+        except:
+            vol_ramp_str = "Error parsing Volatility Profile"
+            
     # 5. Earnings Diagnostics (Latest Event)
     # latest_reaction has the T+1 move
     if not latest_reaction.empty:
@@ -110,18 +182,81 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
 
     alerts_str = "\\n".join(alerts) if alerts else "None"
 
-    # --- PROMPT CONSTRUCTION ---
-    prompt = f"""
-    You are a Risk Office reporting assistant. Your task is to generate a comprehensive, professional single stock risk report using the data provided from the dashboard.
+    # --- 8. ADVANCED CONTEXT (New) ---
+    # A. Historical Win Rate
+    win_rate_str = "N/A"
+    if not reaction_days.empty:
+        wins = (reaction_days[stock_ticker] > 0).sum()
+        total_evts = len(reaction_days)
+        win_rate = wins / total_evts
+        win_rate_str = f"{win_rate:.0%} ({wins}/{total_evts} Positive Reactions)"
 
-    Follow these rules:
-    Be concise but detailed.
-    Highlight key risks, changes, and insights.
-    Tell a story in the text, not just in the graphs.
-    Always interpret the numbers, not just report them.
-    Tone is professional and objective. Audience is Portfolio Managers and Risk Officers.
-    Surface new insights: drift, regime change, anomalies, pre-earnings build-up, scenario asymmetry.
-    Suggest actionable next steps/hedges.
+    # B. Pre-Earnings Setup (Current 30d Trend)
+    # Using last 30 days of full_df to see entering momentum
+    setup_30d = full_df.iloc[-30:][stock_ticker].sum()
+    setup_str = f"{setup_30d:+.1%} (30-Day Run-up)"
+    setup_desc = "Overbought" if setup_30d > 0.10 else ("Oversold" if setup_30d < -0.10 else "Neutral")
+
+    # C. Market Regime
+    regime_str = "Unknown"
+    if 'Correlation_Regime' in rolling_stats.columns:
+        curr_corr = rolling_stats['Correlation_Regime'].iloc[-1]
+        regime_desc = "Crisis/High Correlation" if curr_corr > 0.5 else "Stock-Picker/Low Correlation"
+        regime_str = f"{curr_corr:.2f} ({regime_desc})"
+
+    # D. Seasonality
+    season_str = "N/A"
+    if not reaction_days.empty:
+        # Check if 'Quarter' exists, if not derive it
+        if 'Quarter' not in reaction_days.columns:
+             reaction_days = reaction_days.copy()
+             reaction_days['Quarter'] = reaction_days['Date'].dt.quarter
+        
+        q_stats = reaction_days.groupby('Quarter')[stock_ticker].mean()
+        best_q = q_stats.idxmax()
+        worst_q = q_stats.idxmin()
+        season_str = f"Best: Q{best_q} ({q_stats[best_q]:+.1%}), Worst: Q{worst_q} ({q_stats[worst_q]:+.1%})"
+
+    # E. Asymmetry (Risk/Reward Skew)
+    asymmetry_str = "N/A"
+    if not reaction_days.empty:
+        avg_up = reaction_days[reaction_days[stock_ticker] > 0][stock_ticker].mean()
+        avg_down = reaction_days[reaction_days[stock_ticker] < 0][stock_ticker].mean()
+        # Handle nan if no up or no down moves
+        avg_up = avg_up if not np.isnan(avg_up) else 0.0
+        avg_down = avg_down if not np.isnan(avg_down) else 0.0
+        
+        asymmetry_str = f"Avg Upside: {avg_up:+.1%}, Avg Downside: {avg_down:+.1%}"
+
+    # F. Post-Earnings Drift (T+2 to T+10)
+    drift_str = "N/A"
+    if not combined_events.empty:
+        # Filter for T+10 cumulative - T+1 cumulative
+        # Simplified: just average T+2 to T+5 return
+        # We need to act on 'Event_ID' group
+        drifts = []
+        for eid, grp in combined_events.groupby('Event_ID'):
+            # Check if we have day 1 and day 5 or similar
+            try:
+                p1 = grp[grp['Rel_Day'] == 1][stock_ticker].values[0]
+                p_end = grp[grp['Rel_Day'] == 5][stock_ticker].values[0]
+                drifts.append(p_end - p1)
+            except:
+                continue
+        
+        if drifts:
+            avg_drift = np.mean(drifts)
+            drift_desc = "Continuation" if avg_drift * (1 if wins/total_evts > 0.5 else -1) > 0 else "Reversal"
+            drift_str = f"{avg_drift:+.1%} (Avg T+1 to T+5 move). Tendency: {drift_desc}"
+
+    # --- PROMPT CONSTRUCTION ---
+    
+    # 1. Get Agent Instructions
+    agent_instructions = AGENT_PROMPTS.get(agent_persona, AGENT_PROMPTS["Risk Manager 🛡️"])
+
+    # 2. Build Full Prompt
+    prompt = f"""
+    {agent_instructions}
 
     Here is the Data for {stock_ticker} (As of {latest_date.strftime('%Y-%m-%d')}):
 
@@ -139,6 +274,7 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     - Annualized Volatility: {total_vol:.1%}
     - Idiosyncratic Risk Ratio (Specific Risk): {pct_idio:.0%}
     - Factor Risk Ratio: {1-pct_idio:.0%}
+    {vol_ramp_str}
 
     4. Performance Attribution (Latest Earnings Event)
     - Total Move: {evt_ret:+.1%}
@@ -152,39 +288,14 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
 
     7. Alerts & Risk Flags Triggered
     {alerts_str}
-
-    ---
     
-    Generate the report following this structure EXACTLY:
-
-    1. Stock Overview
-    (Name, return, context)
-
-    2. Factor Exposure Summary
-    (Top loadings, trends, drift notes)
-
-    3. Risk Decomposition
-    (Vol breakdown, concentration check)
-
-    4. Performance Attribution
-    (Latest event drivers, alpha vs beta)
-
-    5. Event Risk & Earnings Diagnostics
-    (Sigma moves, surprise magnitude)
-
-    6. Scenario Analysis
-    (Discuss the specific scenario impacts provided above. Highlight vulnerabilities like "Vulnerable to Value Rotation")
-
-    7. Alerts & Risk Flags
-    (List the triggered alerts and explain implications)
-
-    8. Actionable Insights Section
-    (Provide 3-5 key takeaways: Beta drift prediction, style transition, hedging ideas)
-
-    9. Summary Paragraph
-    (4-5 lines summarizing the main risk narrative. Professional tone.)
-
-    Use proper Markdown formatting with headers.
+    8. ADVANCED CONTEXT & PROBABILITIES
+    - Historical Win Rate (T+1): {win_rate_str}
+    - Asymmetry Profile: {asymmetry_str} (Skew check).
+    - Current Setup (30d Pre-Event): {setup_str} -> Market is potentially {setup_desc}.
+    - Market Regime: {regime_str}
+    - Seasonality Patterns: {season_str}
+    - Post-Earnings Drift: {drift_str}
     """
     
     try:

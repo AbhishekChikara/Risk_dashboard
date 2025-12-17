@@ -815,68 +815,74 @@ def main():
                         mime='text/csv',
                     )
 
-    # --- Tab 4: AI Summary ---
+    # --- Tab 4: AI Summary (Multi-Agent) ---
     with tab4:
-        st.header(f"AI-Generated Analyst Summary for {selected_stock}")
-
-        # Use session state to hold the summary
-        if 'ai_summary' not in st.session_state:
-            st.session_state.ai_summary = None
-        if 'summary_stock' not in st.session_state:
-            st.session_state.summary_stock = None
-
+        st.header("🤖 AI Risk & Strategy Report")
+        
+        # --- Multi-Agent Selector ---
+        st.markdown("### Choose Your Analyst Persona")
+        agent_options = ["Risk Manager 🛡️", "Portfolio Manager 💼", "Quantitative Analyst 🔢"]
+        selected_agent = st.selectbox("Select Agent Persona:", agent_options, index=0)
+        
+        st.info(f"**Current Agent**: {selected_agent}")
+        
         if st.button("Generate Report"):
             if not api_key:
-                st.warning("Please enter an API Key in the sidebar.")
-                st.session_state.ai_summary = None # Clear previous summary
+                st.error("Please enter an API Key in the sidebar.")
             else:
-                # Prepare data
-                reaction_days = combined_events[combined_events['Rel_Day'] == 1]
-                
-                # Get latest and second latest event data
-                latest_event_date = earnings_df['Earnings Date'].max()
-                latest_reaction = full_df[full_df['Date'] == latest_event_date + pd.Timedelta(days=1)]
-                
-                second_latest_event_date = earnings_df['Earnings Date'].nlargest(2).iloc[-1] if len(earnings_df) > 1 else None
-                second_latest_reaction = full_df[full_df['Date'] == second_latest_event_date + pd.Timedelta(days=1)] if second_latest_event_date else pd.DataFrame()
-                
-                if not latest_reaction.empty:
-                    st.info("Generating analysis...")
-                    # heatmap_df = create_heatmap_data(reaction_days, full_df)
-                    
-                    # Compute rolling beta for trends in AI summary
-                    # rolling_stats already exists in main() scope
-                    
-                    with st.spinner(f"Analyzing with {selected_model}..."):
-                        summary = generate_ai_summary(
-                            api_key, 
-                            selected_stock, 
-                            full_df, 
-                            reaction_days, 
-                            latest_reaction, 
-                            second_latest_reaction, 
-                            factor_cols, 
-                            combined_events,
-                            rolling_stats, # Passed
-                            loadings_df,    # Passed
-                            model_name=selected_model
-                        )
-                        st.session_state.ai_summary = summary
-                        st.session_state.summary_stock = selected_stock # Store which stock this summary is for
-                else:
-                    st.error("No data available for the most recent earnings date.")
-                    st.session_state.ai_summary = None
+                with st.spinner(f"🤖 {selected_agent} is analyzing {selected_stock}..."):
+                        
+                        # Gather necessary data
+                        # We need 'reaction_days' and 'combined_events' computed in Tab 1
+                        # Re-computing strictly what is needed here to avoid global variable dependency hell if tab 1 wasn't visited
+                        # Ideally, these should be session_state, but for now we follow the "stateless" tab pattern
+                        
+                        # Re-calc event window data for AI context
+                        ai_events = []
+                        for date in earnings_df['Earnings Date']:
+                            w_df = get_event_window(full_df, date, window_size)
+                            if w_df is not None:
+                                w_df['Event_ID'] = date.strftime('%Y-%m-%d')
+                                ai_events.append(w_df)
+                        
+                        ai_combined = pd.concat(ai_events) if ai_events else pd.DataFrame()
+                        ai_reaction = ai_combined[ai_combined['Rel_Day'] == 1] if not ai_combined.empty else pd.DataFrame()
+                        
+                        # Get latest two events for commentary
+                        latest_evt = ai_reaction.sort_values('Date').iloc[-1:] if not ai_reaction.empty else pd.DataFrame()
+                        second_latest = ai_reaction.sort_values('Date').iloc[-2:-1] if len(ai_reaction) > 1 else pd.DataFrame()
 
-        # Display the summary and download button if it exists for the current stock
-        if st.session_state.ai_summary and st.session_state.summary_stock == selected_stock:
-            st.markdown("---")
-            st.markdown(st.session_state.ai_summary)
-            st.download_button(
-                label="📥 Download Summary",
-                data=st.session_state.ai_summary,
-                file_name=f"AI_Summary_{selected_stock}_{pd.Timestamp.now().strftime('%Y%m%d')}.txt",
-                mime="text/plain",
-            )
+                        # Calculate Volatility Profile for AI Context
+                        vol_profile = calculate_volatility_profiles(full_df, selected_stock, earnings_df['Earnings Date'], window_size)
+
+                        report = generate_ai_summary(
+                            api_key=api_key, 
+                            stock_ticker=selected_stock, 
+                            full_df=full_df, 
+                            reaction_days=ai_reaction, 
+                            latest_reaction=latest_evt, 
+                            second_latest_reaction=second_latest, 
+                            factor_cols=factor_cols, 
+                            combined_events=ai_combined, 
+                            rolling_stats=rolling_stats, 
+                            loadings_df=loadings_df,
+                            vol_profile=vol_profile, # Passed new data
+                            model_name=selected_model,
+                            agent_persona=selected_agent
+                        )
+                        
+                        st.markdown("### AI Report")
+                        st.markdown(report)
+                        st.success("Generation Complete.")
+                        
+                        # Download button for the generated report
+                        st.download_button(
+                            label="📥 Download Report",
+                            data=report,
+                            file_name=f"{selected_stock}_AI_Report_{selected_agent.replace(' ', '_')}_{pd.Timestamp.now().strftime('%Y%m%d')}.md",
+                            mime="text/markdown",
+                        )
+
 
 
 
