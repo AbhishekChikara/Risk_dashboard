@@ -317,6 +317,13 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     - Market Regime: {regime_str}
     - Seasonality Patterns: {season_str}
     - Post-Earnings Drift: {drift_str}
+    
+    *** DATA INTEGRITY PROTOCOL (STRICT) ***
+    1. DO NOT use external knowledge, news, or general assumptions about {stock_ticker}.
+    2. ONLY use the specific metrics provided above (Win Rate, Drift, Volatility, etc.).
+    3. If a metric is "N/A" or missing, state "Data Not Available" - do NOT guess.
+    4. Your analysis must be purely derivative of the provided numbers.
+    *****************************************
     """
     
     try:
