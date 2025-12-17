@@ -25,21 +25,26 @@ AGENT_PROMPTS = {
     You are a conservative Chief Risk Officer (CRO). Your job is to protect capital.
     
     PRIMARY OBJECTIVE: Analyze the stock's behavior around Earnings Announcements.
+    
+    CRITICAL INTERPRETATION GUIDELINES:
+    1. Win Rate vs Magnitude: A ~60% win rate is a coin flip. Focus on MAGNITUDE risk. If the stock drops 8-10%, that wipes out weeks of alpha. That is the risk.
+    2. Drift Profile: If drift is "Momentum/Amplification", it means a bad earnings reaction gets worse over the week.
+    3. Idiosyncratic Risk: If the moves are >60% Idiosyncratic, BETA HEDGING (shorting sector) WILL FAIL. You must recommend Options (Puts/Collars).
+    
     Investigate:
     1. Returns: Does it typically sell off or rally? Is the move asymmetric?
     2. Volatility: Analyze the "Fear Cycle" (Ramp & Crush). Does risk entitle (rise) leading into the event?
     
-    Focus on: Downside tails, historic drawdown patterns around earnings, stress test failures, and "what can go wrong".
     Tone: Critical, defensive, cautious.
     
     Structure:
-    1. Executive Risk Summary (The "Kill" Criteria)
+    1. Executive Risk Summary (The "Kill" Criteria - Focus on Magnitude & Idio Risk)
     2. Earnings Behavior Analysis (Deep Dive)
         - Intraday Reaction: Win Rate & Asymmetry (Upside vs Downside Skew)
         - Volatility Dynamics: The "Fear Cycle" (Ramp up vs Crush down)
         - Drift Profile: Do moves sustain or reverse in days T+2 to T+5?
     3. Factor Exposure Risks (Concentration, crowding)
-    4. Hedging Recommendations (Specific puts/collars based on the vol profile)
+    4. Hedging Recommendations (Specific puts/collars. Explain WHY Beta hedging fails).
     5. Final Verdict: APPROVE / REJECT / HEDGE REQUIRED
     """,
     
@@ -228,26 +233,41 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
         
         asymmetry_str = f"Avg Upside: {avg_up:+.1%}, Avg Downside: {avg_down:+.1%}"
 
+    # G. Event-Specific Idiosyncratic Ratio (New User Req)
+    # The 60-day window understates event risk. We need Avg(|Idio|) / Avg(|Total|) on T+1
+    event_idio_ratio_str = "N/A"
+    if not reaction_days.empty:
+        avg_abs_idio = reaction_days['Idiosyncratic_Return'].abs().mean()
+        avg_abs_total = reaction_days[stock_ticker].abs().mean()
+        if avg_abs_total > 0:
+            e_ratio = avg_abs_idio / avg_abs_total
+            event_idio_ratio_str = f"{e_ratio:.0%} (Event-Specific)"
+
     # F. Post-Earnings Drift (T+2 to T+10)
     drift_str = "N/A"
     if not combined_events.empty:
-        # Filter for T+10 cumulative - T+1 cumulative
-        # Simplified: just average T+2 to T+5 return
-        # We need to act on 'Event_ID' group
         drifts = []
+        signs_match = []
         for eid, grp in combined_events.groupby('Event_ID'):
-            # Check if we have day 1 and day 5 or similar
             try:
                 p1 = grp[grp['Rel_Day'] == 1][stock_ticker].values[0]
-                p_end = grp[grp['Rel_Day'] == 5][stock_ticker].values[0]
-                drifts.append(p_end - p1)
+                p_end = grp[grp['Rel_Day'] == 5][stock_ticker].values[0] # Using T+5 for weekly drift
+                drift_val = p_end - p1
+                drifts.append(drift_val)
+                # Check if drift amplifies the move
+                if (p1 > 0 and drift_val > 0) or (p1 < 0 and drift_val < 0):
+                    signs_match.append(1) # Amplification
+                else:
+                    signs_match.append(0) # Reversal/Damping
             except:
                 continue
         
         if drifts:
             avg_drift = np.mean(drifts)
-            drift_desc = "Continuation" if avg_drift * (1 if wins/total_evts > 0.5 else -1) > 0 else "Reversal"
-            drift_str = f"{avg_drift:+.1%} (Avg T+1 to T+5 move). Tendency: {drift_desc}"
+            match_pct = np.mean(signs_match)
+            # Logic: If >50% of time drift matches move, it's Momentum/Amplification
+            tendency = "MOMENTUM / AMPLIFICATION" if match_pct > 0.5 else "MEAN REVERSION / DAMPING"
+            drift_str = f"{avg_drift:+.1%} (Avg T+1 to T+5). Tendency: {tendency} ({match_pct:.0%} of time trajectory continues)."
 
     # --- PROMPT CONSTRUCTION ---
     
@@ -272,7 +292,8 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
 
     3. Risk Decomposition
     - Annualized Volatility: {total_vol:.1%}
-    - Idiosyncratic Risk Ratio (Specific Risk): {pct_idio:.0%}
+    - Idiosyncratic Risk Ratio (Specific Risk): {pct_idio:.0%} (General 60d)
+    - Event-Specific Idiosyncratic Ratio: {event_idio_ratio_str}
     - Factor Risk Ratio: {1-pct_idio:.0%}
     {vol_ramp_str}
 
