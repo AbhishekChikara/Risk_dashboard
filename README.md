@@ -1,4 +1,4 @@
-# KR Capital: Strategic Earnings Dashboard
+# Strategic Earnings Dashboard
 
 A professional-grade quantitative dashboard for analyzing stock behavior around earnings events. Designed for Portfolio Managers and Risk Officers to visualize return attribution, volatility dynamics, and generate AI-driven hedging strategies.
 
