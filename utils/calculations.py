@@ -143,3 +143,233 @@ def calculate_volatility_profiles(full_df, stock_ticker, earnings_dates, window_
     avg_profile = combined.groupby('Rel_Day')[['Total_Vol', 'Idio_Vol', 'Factor_Vol']].mean().reset_index()
     
     return avg_profile
+
+@st.cache_data
+def calculate_fade_strategy(full_df, earnings_dates, stock_ticker, hold_days=5):
+    """
+    Backtests a "Fade the Move" strategy using User's Final Logic:
+    - Logic: Identify Day 0 (Reaction Day).
+    - Signal: If Day 0 > 0 -> Short (-1). If Day 0 < 0 -> Long (+1).
+    - Return: Geometric compounding of next 'hold_days' returns.
+    """
+    df = full_df.copy().sort_values('Date').reset_index(drop=True)
+    trades = []
+    
+    # User Logic: Iterate dates and find Day 0
+    # earnings_dates is a Series of timestamps
+    for ed in earnings_dates:
+        # Find Day 0 (First trading day > earnings date)
+        # We need the index in 'df'
+        mask = df['Date'] > ed
+        if not mask.any():
+            continue
+            
+        reaction_idx = df[mask].index[0]
+        day_0_date = df.loc[reaction_idx, 'Date']
+        
+        # Day 0 Move (Reaction)
+        day_0_return = df.loc[reaction_idx, stock_ticker]
+        
+        # Determine Direction (FADE Strategy)
+        # Snippet was Momentum (1 if > 0), we invert for Fade (-1 if > 0)
+        direction = -1 if day_0_return > 0 else 1
+        trade_type = "SHORT" if direction == -1 else "LONG"
+        
+        # Define Holding Window (T+1 to T+hold_days) relative to Day 0
+        # Start: reaction_idx + 1
+        start_pos = reaction_idx + 1
+        end_pos = start_pos + hold_days
+        
+        if end_pos > len(df):
+            continue
+            
+        # GEOMETRIC COMPONENT: Calculate actual P&L
+        window_rets = df.iloc[start_pos:end_pos][stock_ticker]
+        if window_rets.empty:
+            continue
+            
+        cumulative_drift = (1 + window_rets).prod() - 1
+        
+        # Strategy P&L
+        strategy_pnl = direction * cumulative_drift
+        
+        trades.append({
+            'Date': df.loc[start_pos, 'Date'] if start_pos < len(df) else day_0_date, # Trade Entry Date (T+1)
+            'Event_Date': ed,
+            'Reaction': day_0_return,
+            'Direction': trade_type,
+            'Hold_Return': strategy_pnl, # This corresponds to '5_Day_PL' in snippet
+            'Cumulative_Return': 0.0 # Placeholder, calc later
+        })
+        
+    if not trades:
+        return None, None
+        
+    trades_df = pd.DataFrame(trades)
+    trades_df['Cumulative_Return'] = trades_df['Hold_Return'].cumsum()
+    
+    # Stats
+    wins = (trades_df['Hold_Return'] > 0).sum()
+    total = len(trades_df)
+    win_rate = wins / total if total > 0 else 0
+    avg_return = trades_df['Hold_Return'].mean()
+    total_return = trades_df['Hold_Return'].sum()
+    
+    stats = {
+        'Win Rate': win_rate,
+        'Avg Return': avg_return,
+        'Total Return': total_return,
+        'Trade Count': total
+    }
+    
+    return stats, trades_df
+    return stats, trades_df
+
+@st.cache_data
+def calculate_beta_trends(rolling_stats):
+    """
+    Calculates the slope of the Rolling Beta over 10, 30, and 60 days.
+    Returns a list of formatted strings.
+    """
+    beta_trends = []
+    if 'Rolling_Beta' in rolling_stats.columns:
+        for w in [10, 30, 60]:
+            if len(rolling_stats) >= w:
+                try:
+                    y = rolling_stats['Rolling_Beta'].iloc[-w:].values
+                    x = np.arange(len(y))
+                    # Check for NaNs
+                    if np.isnan(y).any():
+                        continue
+                    slope = np.polyfit(x, y, 1)[0]
+                    
+                    trend_desc = "Stable"
+                    if slope > 0.005: trend_desc = "Rising"
+                    elif slope < -0.005: trend_desc = "Falling"
+                    
+                    beta_trends.append(f"{w}d: {trend_desc} (Slope {slope:.4f})")
+                except:
+                    continue
+    return beta_trends
+
+@st.cache_data
+def interpret_volatility_ramp(vol_profile):
+    """
+    Interprets the volatility profile (ramp up / crush down) and returns a summary string.
+    """
+    vol_ramp_str = "No Volatility Profile Data Available"
+    if vol_profile is not None and not vol_profile.empty:
+        try:
+            days = vol_profile['Rel_Day'].values
+            
+            # T-Start (Closest to -30, or min)
+            start_day = -30
+            if -30 not in days:
+                neg_days = days[days < 0]
+                if len(neg_days) > 0:
+                    start_day = neg_days.min()
+                else:
+                    start_day = days.min()
+            
+            # T-End (Closest to +10, or max)
+            end_day = 10
+            if 10 not in days:
+                pos_days = days[days > 0]
+                if len(pos_days) > 0:
+                    end_day = pos_days.max() 
+                else:
+                    end_day = days.max()
+            
+            # Get Values
+            t_start_val = vol_profile[vol_profile['Rel_Day'] == start_day]['Total_Vol'].iloc[0]
+            
+            # Get T=0
+            t_0_val = 0
+            t_0_idio = 0
+            if 0 in days:
+                 t_0_val = vol_profile[vol_profile['Rel_Day'] == 0]['Total_Vol'].iloc[0]
+                 t_0_idio = vol_profile[vol_profile['Rel_Day'] == 0]['Idio_Vol'].iloc[0]
+            else:
+                idx_0 = np.abs(days).argmin()
+                day_0 = days[idx_0]
+                t_0_val = vol_profile[vol_profile['Rel_Day'] == day_0]['Total_Vol'].iloc[0]
+                t_0_idio = vol_profile[vol_profile['Rel_Day'] == day_0]['Idio_Vol'].iloc[0]
+
+            t_end_val = vol_profile[vol_profile['Rel_Day'] == end_day]['Total_Vol'].iloc[0]
+            
+            t_0_idio_ratio = t_0_idio / t_0_val if t_0_val > 0 else 0
+            
+            # Calc Ramps
+            ramp_pct = (t_0_val - t_start_val) / t_start_val if t_start_val > 0 else 0
+            crush_pct = (t_end_val - t_0_val) / t_0_val if t_0_val > 0 else 0
+            
+            vol_ramp_str = f"- Pre-Event Ramp (T{start_day} to T0): {ramp_pct:+.1%}\\n- Post-Event Crush (T0 to T+{end_day}): {crush_pct:+.1%}\\n- Risk Composition at Event: {t_0_idio_ratio:.0%} Idiosyncratic / {1-t_0_idio_ratio:.0%} Systematic"
+        except Exception as e:
+            vol_ramp_str = f"Error interpreting Volatility Profile: {e}"
+    else:
+         vol_ramp_str = "Volatility Profile Data is Empty"
+         
+    return vol_ramp_str
+
+@st.cache_data
+def analyze_post_event_drift(combined_events, stock_ticker):
+    """
+    Analyzes post-event price drift to identify Momentum vs Reversion.
+    Returns formatted string and drift correlation.
+    """
+    drift_str = "N/A"
+    drift_corr = 0.0
+    
+    if not combined_events.empty:
+        drifts = []
+        signs_match = []
+        t1_moves = []
+        drift_moves = []
+        
+        for eid, grp in combined_events.groupby('Event_ID'):
+            try:
+                # Dynamic Drift Calculation
+                if 1 not in grp['Rel_Day'].values:
+                    continue
+                    
+                max_day = grp['Rel_Day'].max()
+                if max_day <= 1:
+                    continue
+                    
+                p1 = grp[grp['Rel_Day'] == 1][stock_ticker].values[0]
+                p_end = grp[grp['Rel_Day'] == max_day][stock_ticker].values[0]
+                
+                # For Prompt Text
+                drift_val = p_end - p1
+                drifts.append(drift_val)
+                
+                if (p1 > 0 and drift_val > 0) or (p1 < 0 and drift_val < 0):
+                    signs_match.append(1) # Amplification
+                else:
+                    signs_match.append(0) # Reversal
+                
+                # For Correlation Metric (T+5 fixed if possible, else max)
+                # Try to get exactly T+5
+                if 5 in grp['Rel_Day'].values:
+                    p5 = grp[grp['Rel_Day'] == 5][stock_ticker].values[0]
+                    t1_moves.append(p1)
+                    drift_moves.append(p5 - p1)
+                else:
+                    # Fallback to max day
+                    t1_moves.append(p1)
+                    drift_moves.append(drift_val)
+                    
+            except:
+                continue
+        
+        if drifts:
+            avg_drift = np.mean(drifts)
+            match_pct = np.mean(signs_match)
+            tendency = "MOMENTUM / AMPLIFICATION" if match_pct > 0.5 else "MEAN REVERSION / DAMPING"
+            drift_str = f"{avg_drift:+.1%} (Avg T+1 to End of Window). Tendency: {tendency} ({match_pct:.0%} of time trajectory continues)."
+            
+            if len(t1_moves) > 2:
+                drift_corr = np.corrcoef(t1_moves, drift_moves)[0, 1]
+                if np.isnan(drift_corr): drift_corr = 0.0
+                
+    return drift_str, drift_corr

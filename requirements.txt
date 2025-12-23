@@ -97,3 +97,5 @@ wcwidth
 websockets==15.0.1
 zipp
 
+kaleido==1.2.0
+reportlab

@@ -2,6 +2,7 @@ import google.generativeai as genai
 import streamlit as st
 import pandas as pd
 import numpy as np
+from utils.calculations import calculate_beta_trends, interpret_volatility_ramp, analyze_post_event_drift, calculate_fade_strategy
 
 # --- AI Model Helper ---
 @st.cache_data
@@ -36,10 +37,15 @@ AGENT_PROMPTS = {
     2. Volatility: Analyze the "Fear Cycle" (Ramp & Crush). Does risk entitle (rise) leading into the event?
     3. Regime Sensitivity: Does the stock behavior change when the broader market is in "Crisis Mode" (High Correlation)?
     
+    STRATEGIC CONSISTENCY RULE:
+    - IF the "Tactical Trading Implications" section says "**MOMENTUM EXTENSION**" (Failed Mean Reversion), you MUST characterize the stock's profile as MOMENTUM/TRENDING.
+    - Do NOT call it "Mean Reversion" in your summary if the strategy fail rate confirms momentum.
+    - Instead, frame it as a "Momentum Trap": Fading fails because the trend extends.
+    
     Tone: Critical, defensive, cautious.
     
     Structure:
-    1. Executive Risk Summary (Focus on the primary objective paraphrase your findings)
+    1. Executive Risk Summary (Synthesize Earnings Analysis based on Return and Volatility)
     2. Earnings Behavior Analysis (Deep Dive)
         - Intraday Reaction: Win Rate & Asymmetry (Upside vs Downside Skew)
         - Volatility Dynamics: The "Fear Cycle" (Ramp up vs Crush down)
@@ -76,12 +82,17 @@ AGENT_PROMPTS = {
     """
 }
 
-def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_reaction, second_latest_reaction, factor_cols, combined_events, rolling_stats, loadings_df, vol_profile=None, model_name='models/gemini-1.5-flash', agent_persona="Risk Manager 🛡️"):
+def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_reaction, second_latest_reaction, factor_cols, combined_events, rolling_stats, loadings_df, vol_profile=None, model_name='models/gemini-1.5-flash', agent_persona="Risk Manager 🛡️", images=None, backtest_hold_days=5):
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
     except Exception as e:
         return f"Error configuring AI model: {e}"
+
+    # ... (Rest of data prep code stays same) ...
+    # [Lines 86-474 are unchanged data prep]
+    # ... (Prompt Construction code stays same) ...
+    # [Lines 513-549 are prompt construction]
 
     # --- DATA & METRICS PREPARATION ---
     
@@ -107,17 +118,8 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     top_3_neg = [f"{k} ({v:.2f})" for k, v in sorted_factors if v < 0][-3:]
     
     # Beta Trends (Slope over 10, 30, 60 days)
-    beta_trends = []
-    if 'Rolling_Beta' in rolling_stats.columns:
-        for w in [10, 30, 60]:
-            if len(rolling_stats) >= w:
-                y = rolling_stats['Rolling_Beta'].iloc[-w:].values
-                x = np.arange(len(y))
-                slope = np.polyfit(x, y, 1)[0]
-                trend_desc = "Stable"
-                if slope > 0.005: trend_desc = "Rising"
-                elif slope < -0.005: trend_desc = "Falling"
-                beta_trends.append(f"{w}d: {trend_desc} (Slope {slope:.4f})")
+    # Beta Trends (REFACTORED)
+    beta_trends = calculate_beta_trends(rolling_stats)
     
     # 3. Risk Decomposition
     window_60 = full_df.iloc[-60:].copy()
@@ -126,61 +128,8 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     total_vol = np.sqrt(var_factor + var_idio)
     pct_idio = var_idio / (var_factor + var_idio) if total_vol > 0 else 0
     
-    # 4. Volatility Ramp (Fear Cycle) - Derived from output data
-    vol_ramp_str = "No Volatility Profile Data Available"
-    if vol_profile is not None:
-        # Expecting cols: Rel_Day, Total_Vol, Idio_Vol, Factor_Vol
-        # T-30, T=0, T+30
-        if not vol_profile.empty:
-            try:
-                # Robust lookup: Find available days
-                days = vol_profile['Rel_Day'].values
-                
-                # T-Start (Closest to -30, or min)
-                start_day = -30
-                if -30 not in days:
-                    # Find closest day <= 0
-                    neg_days = days[days < 0]
-                    start_day = neg_days.min() if len(neg_days) > 0 else days.min()
-                
-                # T-End (Closest to +10, or max)
-                end_day = 10
-                if 10 not in days:
-                    pos_days = days[days > 0]
-                    end_day = pos_days.max() if len(pos_days) > 0 else days.max()
-                
-                # Get Values
-                t_start_val = vol_profile[vol_profile['Rel_Day'] == start_day]['Total_Vol'].iloc[0]
-                
-                # Get T=0 (or closest to 0 if exact 0 missing, though unlikely for event study)
-                t_0_val = 0
-                if 0 in days:
-                     t_0_val = vol_profile[vol_profile['Rel_Day'] == 0]['Total_Vol'].iloc[0]
-                     t_0_idio = vol_profile[vol_profile['Rel_Day'] == 0]['Idio_Vol'].iloc[0]
-                else:
-                    # Fallback to day closest to 0
-                    idx_0 = np.abs(days).argmin()
-                    day_0 = days[idx_0]
-                    t_0_val = vol_profile[vol_profile['Rel_Day'] == day_0]['Total_Vol'].iloc[0]
-                    t_0_idio = vol_profile[vol_profile['Rel_Day'] == day_0]['Idio_Vol'].iloc[0]
-
-                t_end_val = vol_profile[vol_profile['Rel_Day'] == end_day]['Total_Vol'].iloc[0]
-                
-                t_0_idio_ratio = t_0_idio / t_0_val if t_0_val > 0 else 0
-                
-                # Calc Ramps using actual days found
-                ramp_pct = (t_0_val - t_start_val) / t_start_val if t_start_val > 0 else 0
-                crush_pct = (t_end_val - t_0_val) / t_0_val if t_0_val > 0 else 0
-                
-                vol_ramp_str = f"""
-                - Pre-Event Ramp (T{start_day} to T0): {ramp_pct:+.1%}
-                - Post-Event Crush (T0 to T+{end_day}): {crush_pct:+.1%}
-                - Risk Composition at Event: {t_0_idio_ratio:.0%} Idiosyncratic / {1-t_0_idio_ratio:.0%} Systematic
-                """
-            except Exception as e:
-                vol_ramp_str = f"Error interpreting Volatility Profile: {e}"
-        else:
-             vol_ramp_str = "Volatility Profile Data is Empty"
+    # 4. Volatility Ramp (Fear Cycle) (REFACTORED)
+    vol_ramp_str = interpret_volatility_ramp(vol_profile)
     # latest_reaction has the T+1 move
     if not latest_reaction.empty:
         row = latest_reaction.iloc[0]
@@ -315,30 +264,8 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
             event_idio_ratio_str = f"{e_ratio:.0%} (Event-Specific)"
 
     # F. Post-Earnings Drift (T+2 to T+10)
-    drift_str = "N/A"
-    if not combined_events.empty:
-        drifts = []
-        signs_match = []
-        for eid, grp in combined_events.groupby('Event_ID'):
-            try:
-                p1 = grp[grp['Rel_Day'] == 1][stock_ticker].values[0]
-                p_end = grp[grp['Rel_Day'] == 5][stock_ticker].values[0] # Using T+5 for weekly drift
-                drift_val = p_end - p1
-                drifts.append(drift_val)
-                # Check if drift amplifies the move
-                if (p1 > 0 and drift_val > 0) or (p1 < 0 and drift_val < 0):
-                    signs_match.append(1) # Amplification
-                else:
-                    signs_match.append(0) # Reversal/Damping
-            except:
-                continue
-        
-        if drifts:
-            avg_drift = np.mean(drifts)
-            match_pct = np.mean(signs_match)
-            # Logic: If >50% of time drift matches move, it's Momentum/Amplification
-            tendency = "MOMENTUM / AMPLIFICATION" if match_pct > 0.5 else "MEAN REVERSION / DAMPING"
-            drift_str = f"{avg_drift:+.1%} (Avg T+1 to T+5). Tendency: {tendency} ({match_pct:.0%} of time trajectory continues)."
+    # F. Post-Earnings Drift (T+2 to T+10) (REFACTORED)
+    drift_str, drift_corr = analyze_post_event_drift(combined_events, stock_ticker)
 
     # H. Historical Earnings Ledger (Contextual Memory)
     history_str = "N/A"
@@ -381,8 +308,13 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     factor_context = "N/A"
     try:
         # 1. Identify significant exposures (>0.5)
-        # curr_loadings is already defined above
-        sig_factors = curr_loadings[curr_loadings.abs() > 0.5].index.tolist()
+        # curr_loadings is already defined above, but might contain 'Date' which fails abs()
+        # Filter for numeric only
+        numeric_loadings = curr_loadings.drop(['Date'], errors='ignore')
+        if not numeric_loadings.empty:
+             sig_factors = numeric_loadings[pd.to_numeric(numeric_loadings, errors='coerce').abs() > 0.5].index.tolist()
+        else:
+             sig_factors = []
         # Filter strictly for factors present in factor_cols (to avoid '_Load' suffixes messing up lookup)
         sig_factors = [f for f in sig_factors if f in factor_cols or f.replace('_Load', '') in factor_cols]
         
@@ -467,10 +399,80 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
         q_avg = q_avg if not np.isnan(q_avg) else 0.0
         seasonality_context = f"Current Quarter (Q{current_q}) typically sees moves of {q_avg:.1%}."
 
-    # 4. Kill Criteria Switch
-    # Flag if Idio risk > 60% AND Avg Move > 6%
-    avg_abs_move_val = reaction_days[stock_ticker].abs().mean() if not reaction_days.empty else 0
-    kill_switch = "TRUE" if (idio_ratio_val > 60 and avg_abs_move_val > 0.06) else "FALSE"
+    # 4. Critical Risk Flag (Removed by User Request)
+    # kill_switch logic removed.
+
+    # --- K. Factor Betrayal (Correlation Breakdown) ---
+    # Compare Factor Correlation on "Normal Days" vs "Earnings Days"
+    betrayal_table_str = "Data Not Available"
+    try:
+        if not reaction_days.empty and not full_df.empty:
+            # 1. Identify Earnings Days (T+1)
+            # We use reaction_days for the "Earnings Day" set
+            earnings_dates = reaction_days['Date']
+            
+            # 2. Identify Normal Days (All days NOT in earnings_dates)
+            normal_df = full_df[~full_df['Date'].isin(earnings_dates)]
+            
+            # 3. Calculate Correlations
+            # Normal Days
+            if len(normal_df) > 10:
+                norm_corr = normal_df[[stock_ticker, 'Factor_Return']].corr().iloc[0, 1]
+            else:
+                norm_corr = np.nan
+                
+            # Earnings Days
+            if len(reaction_days) > 2: # Need at least a few points for correlation
+                earn_corr = reaction_days[[stock_ticker, 'Factor_Return']].corr().iloc[0, 1]
+            else:
+                earn_corr = np.nan
+            
+            # 4. Format Table
+            if not np.isnan(norm_corr) and not np.isnan(earn_corr):
+                betrayal_table_str = f"""
+                | Condition | Beta Correlation (Stock vs Factor Model) | Interpretation |
+                | :--- | :--- | :--- |
+                | **Normal Days** | **{norm_corr:.2f}** | Typical market behavior. |
+                | **Earnings Days (T+1)** | **{earn_corr:.2f}** | {"⚠️ FACTOR BETRAYAL (Broken Link)" if earn_corr < 0.3 else "Linkage Intact"} |
+                """
+            else:
+                 betrayal_table_str = "Insufficient data points for correlation calculation."
+                 
+            # 5. Calculate Earnings Volatility Multiplier (Event Vol / Normal Vol)
+            normal_vol = normal_df[stock_ticker].std()
+            event_vol = reaction_days[stock_ticker].std()
+            earnings_vol_multiplier = (event_vol / normal_vol) if normal_vol > 0 else 1.0
+            
+    except Exception as e:
+        betrayal_table_str = f"Error calculating Factor Betrayal: {e}"
+        earnings_vol_multiplier = 1.0
+
+    # --- L. Strategy Backtest (for AI Prompt) ---
+    strategy_str = "Data Not Available"
+    try:
+        # Using imported function
+        st_stats, _ = calculate_fade_strategy(full_df, reaction_days['Date'], stock_ticker, hold_days=backtest_hold_days)
+        
+        if st_stats:
+            win_rate = st_stats['Win Rate']
+            # Dynamic Interpretation
+            if win_rate < 0.40:
+                conclusion = "FAILED. The stock exhibits **MOMENTUM EXTENSION** (The move tends to continue, and fading it causes losses)."
+            elif win_rate > 0.60:
+                conclusion = "SUCCEEDED. The stock exhibits **MEAN REVERSION** (The move tends to reverse)."
+            else:
+                conclusion = "Inconclusive / Random Walk."
+
+            strategy_str = f"""
+            Backtesting a 'Fade the Move' (Mean Reversion) strategy yielded a {win_rate:.1%} Win Rate.
+            Conclusion: The strategy {conclusion}
+            - Average Trade Return: {st_stats['Avg Return']:.2%} (Holding {backtest_hold_days} Days).
+            - Total Cumulative Return: {st_stats['Total Return']:.2%}.
+            """
+        else:
+            strategy_str = "Insufficient data for Strategy Backtest."
+    except Exception as e:
+        strategy_str = f"Strategy Backtest Error: {e}"
 
     # --- PROMPT CONSTRUCTION ---
     
@@ -497,8 +499,14 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     - Annualized Volatility: {total_vol:.1%}
     - Idiosyncratic Risk Ratio (Specific Risk): {pct_idio:.0%} (General 60d)
     - Event-Specific Idiosyncratic Ratio: {event_idio_ratio_str}
+    - **CASE STUDY METRICS**:
+        - **Idiosyncratic Risk Pct (Event):** {idio_ratio_val:.1f}% (Matches User Case Study)
+        - **Earnings Volatility Multiplier:** {earnings_vol_multiplier:.1f}x (Event Vol vs Normal Vol)
     - Factor Risk Ratio: {1-pct_idio:.0%}
     {vol_ramp_str}
+
+    **Factor Betrayal Table (Correlation Breakdown):**
+    {betrayal_table_str}
 
     **3. RISK & BEHAVIORAL PROFILE (DEEP DIVE):**
     - **Idiosyncratic Risk Ratio:** {idio_ratio_val:.1f}% (If >60%, Beta Hedging is INEFFECTIVE).
@@ -506,30 +514,30 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     - **Seasonality Context:** {seasonality_context}
     - **Factor Environment:** {factor_context}
     
-    **4. KILL CRITERIA STATUS:**
-    - **Critical Risk Flag:** {kill_switch}
+    **4. TACTICAL TRADING IMPLICATIONS:**
+    {strategy_str}
 
-    4. Performance Attribution (Latest Earnings Event)
+    6. Performance Attribution (Latest Earnings Event)
     - Total Move: {evt_ret:+.1%}
     - Alpha Component: {evt_alpha:+.1%} (Remainder explained by factors)
     
-    5. Event Risk & Earnings Diagnostics
+    7. Event Risk & Earnings Diagnostics
     - Implied Move vs Realized: Realized move was {sigma:.1f} Standard Deviations (Sigma).
     
-    6. Scenario Analysis (Hypothetical P&L Impact)
+    8. Scenario Analysis (Hypothetical P&L Impact)
     {scenario_str}
 
-    7. Alerts & Risk Flags Triggered
+    9. Alerts & Risk Flags Triggered
     {alerts_str}
     
-    8. Historical Context (The Ledger)
+    10. Historical Context (The Ledger)
     Last 5 Earnings Events:
     {history_str}
     
     Records (All-Time):
     {records_str}
     
-    9. ADVANCED CONTEXT & PROBABILITIES
+    11. ADVANCED CONTEXT & PROBABILITIES
     - Historical Win Rate (T+1): {win_rate_str}
     - Tail Risk Profile: {tail_risk_str}
     - Asymmetry Profile: {asymmetry_str} (Skew check).
@@ -538,6 +546,12 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     - Market Regime: {regime_str}
     - Seasonality Patterns: {season_str}
     - Post-Earnings Drift: {drift_str}
+    
+    **VISUAL EVIDENCE CHECK (CRITICAL):**
+    I have attached 1) **Equity Curve** and 2) **Earnings Return Histogram**. 
+    - **Equity Curve**: Does it trend UP? (Confirmation of Mean Reversion).
+    - **Histogram**: Do you see "Fat Tails"? (Bars at the far left/right edges that are taller than the white dashed Normal Curve).
+    - **Remarks**: Validating these visuals must be part of your "Event Risk" or "Tactical Implications" analysis. Mention "Fat Tails" if seen.
     
     *** DATA INTEGRITY PROTOCOL (STRICT) ***
     1. DO NOT use external knowledge, news, or general assumptions about {stock_ticker}.
@@ -549,7 +563,21 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     """
     
     try:
-        response = model.generate_content(prompt)
-        return response.text
+        content = [prompt]
+        if images:
+            content.extend(images)
+            
+        response = model.generate_content(content)
+        
+        # Extract Token Usage
+        usage = {}
+        if hasattr(response, 'usage_metadata'):
+            usage = {
+                'prompt_tokens': response.usage_metadata.prompt_token_count,
+                'candidates_tokens': response.usage_metadata.candidates_token_count,
+                'total_tokens': response.usage_metadata.total_token_count
+            }
+            
+        return response.text, usage
     except Exception as e:
-        return f"AI Generation Error: {e}"
+        return f"AI Generation Error: {e}", {}

@@ -23,6 +23,7 @@ A professional-grade quantitative dashboard for analyzing stock behavior around 
 - **Waterfalls**: Attribution of returns to specific factors (Market, Semi, Value, Momentum).
 - **Event Comparison**: Side-by-side analysis of two historical quarters.
 - **Scenario Analysis**: Stress-test portfolio P&L against market shocks (e.g., "Tech Rally +5%").
+- **PDF Reporting**: Generate professional-grade PDF reports with AI summaries and embedded visualizations (Tab 4).
 
 ---
 

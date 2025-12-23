@@ -815,6 +815,49 @@ def main():
                         mime='text/csv',
                     )
 
+
+    # --- Step 9: Strategy Backtest (Mean Reversion) ---
+    with st.expander("9. Strategy Backtest: Fade the Move", expanded=False):
+        st.markdown("### 🏹 Fade the Move: Mean Reversion Strategy")
+        st.markdown("""
+        **Hypothesis**: Large initial earnings moves (Reaction Day) tend to revert over the subsequent days due to liquidity dynamics and overreaction.
+        **Strategy**:
+        *   If **Gap Up** (Reaction > 0): **Short** at Close of Reaction Day.
+        *   If **Gap Down** (Reaction < 0): **Long** at Close of Reaction Day.
+        *   **Exit**: Close position after **N** days.
+        """)
+        
+        col_strat1, col_strat2 = st.columns([1, 3])
+        with col_strat1:
+            hold_days = st.number_input("Holding Period (Days)", min_value=1, max_value=20, value=5, step=1, key="backtest_hold_days")
+        
+        with col_strat2:
+            from utils.calculations import calculate_fade_strategy
+            
+            strat_stats, trades_df = calculate_fade_strategy(full_df, earnings_df['Earnings Date'], selected_stock, hold_days=hold_days)
+            
+            if strat_stats:
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Win Rate", f"{strat_stats['Win Rate']:.1%}")
+                c2.metric("Avg Trade Return", f"{strat_stats['Avg Return']:.2%}")
+                c3.metric("Total Cumulative Return", f"{strat_stats['Total Return']:.2%}")
+                
+                # Plot Equity Curve
+                fig_eq = px.line(trades_df, x='Event_Date', y='Cumulative_Return', 
+                                 title=f"Strategy Equity Curve ({hold_days}-Day Hold)",
+                                 markers=True)
+                fig_eq.add_hline(y=0, line_dash="dash", line_color="white")
+                st.plotly_chart(fig_eq, width="stretch")
+                
+                with st.expander("View Trade Log"):
+                    st.dataframe(trades_df.style.format({
+                        'Reaction': '{:.2%}',
+                        'Hold_Return': '{:.2%}',
+                        'Cumulative_Return': '{:.2%}'
+                    }))
+            else:
+                st.info("Insufficient data to generate backtest.")
+
     # --- Tab 4: AI Summary (Multi-Agent) ---
     with tab4:
         st.header("🤖 AI Risk & Strategy Report")
@@ -823,6 +866,9 @@ def main():
         st.markdown("### Choose Your Analyst Persona")
         agent_options = ["Risk Manager 🛡️", "Portfolio Manager 💼", "Quantitative Analyst 🔢"]
         selected_agent = st.selectbox("Select Agent Persona:", agent_options, index=0)
+        
+        # --- Report Format Selector (Sidebar) ---
+        report_format = st.sidebar.radio("Report Format (Download)", ["Markdown", "PDF"], index=0)
         
         st.info(f"**Current Agent**: {selected_agent}")
         
@@ -835,7 +881,6 @@ def main():
                         # Gather necessary data
                         # We need 'reaction_days' and 'combined_events' computed in Tab 1
                         # Re-computing strictly what is needed here to avoid global variable dependency hell if tab 1 wasn't visited
-                        # Ideally, these should be session_state, but for now we follow the "stateless" tab pattern
                         
                         # Re-calc event window data for AI context
                         ai_events = []
@@ -855,7 +900,95 @@ def main():
                         # Calculate Volatility Profile for AI Context
                         vol_profile = calculate_volatility_profiles(full_df, selected_stock, earnings_df['Earnings Date'], window_size)
 
-                        report = generate_ai_summary(
+                        # --- Multi-Modal Image Prep ---
+                        ai_images = []
+                        raw_pdf_images = [] # For PDF generation
+                        
+                        # Store figures for UI rendering
+                        ui_figs = {}
+
+                        try:
+                            import io
+                            from PIL import Image
+                            
+                            # Re-generate charts for AI (Need figure objects)
+                            if vol_profile is not None:
+                                fig_ramp_ai, fig_comp_ai = plot_volatility_analysis(vol_profile, selected_stock)
+                                
+                                # FIX: Update Line Color for PDF/White Background Visibility
+                                # The default is white line on dark background, which disappears on white paper.
+                                fig_ramp_ai.update_traces(line=dict(color='#1f77b4')) # Standard blue
+                                fig_ramp_ai.update_layout(template="plotly_white") # Force white background theme
+                                
+                                ui_figs['ramp'] = fig_ramp_ai
+                                ui_figs['comp'] = fig_comp_ai
+
+                                # Convert to Image for AI (PIL) and PDF (Bytes)
+                                img_bytes_ramp = fig_ramp_ai.to_image(format="png", width=800, height=400)
+                                ai_images.append(Image.open(io.BytesIO(img_bytes_ramp)))
+                                raw_pdf_images.append(img_bytes_ramp)
+                                
+                                img_bytes_comp = fig_comp_ai.to_image(format="png", width=800, height=400)
+                                ai_images.append(Image.open(io.BytesIO(img_bytes_comp)))
+                                raw_pdf_images.append(img_bytes_comp)
+                                
+                            if not ai_reaction.empty:
+                                fig_betrayal_ai = px.scatter(ai_reaction, x='Factor_Return', y=selected_stock, title="Factor Betrayal")
+                                # Add simple 45 deg line
+                                mn = min(ai_reaction['Factor_Return'].min(), ai_reaction[selected_stock].min())
+                                mx = max(ai_reaction['Factor_Return'].max(), ai_reaction[selected_stock].max())
+                                fig_betrayal_ai.add_shape(type="line", x0=mn, y0=mn, x1=mx, y1=mx, line=dict(color="Gray", dash="dash"))
+                                
+                                ui_figs['betrayal'] = fig_betrayal_ai
+                                
+                                img_bytes_betrayal = fig_betrayal_ai.to_image(format="png", width=800, height=400)
+                                ai_images.append(Image.open(io.BytesIO(img_bytes_betrayal)))
+                                raw_pdf_images.append(img_bytes_betrayal)
+
+                            # 3. Strategy Backtest Curve (New)
+                            from utils.calculations import calculate_fade_strategy
+                            # Get hold days from Step 9 input (default 5 if not set)
+                            algo_days = st.session_state.get("backtest_hold_days", 5)
+                            
+                            strat_stats_ai, trades_df_ai = calculate_fade_strategy(full_df, earnings_df['Earnings Date'], selected_stock, hold_days=algo_days)
+                            
+                            if strat_stats_ai and not trades_df_ai.empty:
+                                fig_eq_ai = px.line(trades_df_ai, x='Event_Date', y='Cumulative_Return', 
+                                         title=f"Backtest Equity Curve (Fade Strategy - {algo_days} Day Hold)",
+                                         markers=True)
+                                fig_eq_ai.add_hline(y=0, line_dash="dash", line_color="gray")
+                                
+                                # Fix colors for PDF/Image
+                                fig_eq_ai.update_traces(line=dict(color='#1f77b4'))
+                                fig_eq_ai.update_layout(template="plotly_white")
+
+                                ui_figs['equity'] = fig_eq_ai
+                                
+                                img_bytes_eq = fig_eq_ai.to_image(format="png", width=800, height=400)
+                                ai_images.append(Image.open(io.BytesIO(img_bytes_eq)))
+                                raw_pdf_images.append(img_bytes_eq)
+                                
+                            # 4. Earnings Distribution (Tail Risk) - NEW
+                            from utils.visualizations import plot_earnings_histogram
+                            fig_hist = plot_earnings_histogram(ai_reaction, selected_stock)
+                            
+                            # Update Layout for Dark Theme Match
+                            fig_hist.update_layout(template="plotly_dark", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+                            
+                            ui_figs['histogram'] = fig_hist
+                            
+                            # Add to AI Images
+                            # For PDF/White background image
+                            fig_hist_white = plot_earnings_histogram(ai_reaction, selected_stock)
+                            fig_hist_white.update_layout(template="plotly_white")
+                            img_bytes_hist = fig_hist_white.to_image(format="png", width=800, height=400)
+                            ai_images.append(Image.open(io.BytesIO(img_bytes_hist)))
+                            raw_pdf_images.append(img_bytes_hist)
+                                
+                        except Exception as e:
+                            st.warning(f"Could not prepare images for AI (Is kaleido installed?): {e}")
+
+                        report, usage = generate_ai_summary(
                             api_key=api_key, 
                             stock_ticker=selected_stock, 
                             full_df=full_df, 
@@ -868,20 +1001,89 @@ def main():
                             loadings_df=loadings_df,
                             vol_profile=vol_profile, # Passed new data
                             model_name=selected_model,
-                            agent_persona=selected_agent
+                            agent_persona=selected_agent,
+                            images=ai_images, # Pass images!
+                            backtest_hold_days=algo_days # Pass dynamic hold days
                         )
                         
-                        st.markdown("### AI Report")
-                        st.markdown(report)
-                        st.success("Generation Complete.")
-                        
-                        # Download button for the generated report
-                        st.download_button(
-                            label="📥 Download Report",
-                            data=report,
-                            file_name=f"{selected_stock}_AI_Report_{selected_agent.replace(' ', '_')}_{pd.Timestamp.now().strftime('%Y%m%d')}.md",
-                            mime="text/markdown",
-                        )
+                        # save to session state
+                        st.session_state['ai_report_content'] = report
+                        st.session_state['ai_report_usage'] = usage
+                        st.session_state['ai_report_images'] = raw_pdf_images
+                        st.session_state['ai_report_figs'] = ui_figs
+                        st.session_state['ai_report_agent'] = selected_agent
+                        st.session_state['ai_report_stock'] = selected_stock
+
+        # --- Display Report from Session State ---
+        if 'ai_report_content' in st.session_state:
+             # Check if stock/agent matches current selection (optional, but good for consistency)
+             # keeping simple: just show what's in state
+             
+             report = st.session_state['ai_report_content']
+             usage = st.session_state.get('ai_report_usage', {})
+             ui_figs = st.session_state.get('ai_report_figs', {})
+             raw_pdf_images = st.session_state.get('ai_report_images', [])
+             saved_agent = st.session_state.get('ai_report_agent', selected_agent)
+             saved_stock = st.session_state.get('ai_report_stock', selected_stock)
+             
+             st.markdown("### AI Report")
+             
+             # Token Usage Display
+             if usage:
+                 u_col1, u_col2, u_col3 = st.columns(3)
+                 u_col1.caption(f"Input Tokens: {usage.get('prompt_tokens', 0)}")
+                 u_col2.caption(f"Output Tokens: {usage.get('candidates_tokens', 0)}")
+                 u_col3.caption(f"Total Tokens: {usage.get('total_tokens', 0)}")
+             
+             st.markdown(report)
+             st.success("Generation Complete.")
+             
+             # --- Supporting Visual Evidence (New) ---
+             st.markdown("## 📊 Supporting Visual Evidence")
+             
+             # 1. Volatility Plots
+             if 'ramp' in ui_figs and 'comp' in ui_figs:
+                 col_vai1, col_vai2 = st.columns(2)
+                 with col_vai1:
+                     st.plotly_chart(ui_figs['ramp'], width="stretch", key="ai_vol_ramp_persist")
+                 with col_vai2:
+                     st.plotly_chart(ui_figs['comp'], width="stretch", key="ai_vol_comp_persist")
+             
+             # 2. Factor Betrayal Plot
+             if 'betrayal' in ui_figs:
+                 st.plotly_chart(ui_figs['betrayal'], width="stretch", key="ai_betrayal_persist")
+                 st.caption("Points far from the dashed line indicate 'Factor Betrayal' (Idiosyncratic decoupling).")
+
+             # 3. Strategy Equity Curve
+             # REMOVED due to duplication with Step 9 interactive chart
+             # if 'equity' in ui_figs:
+             #     st.plotly_chart(ui_figs['equity'], width="stretch", key="ai_equity_persist")
+             #     st.caption("Hypothetical Equity Curve of fading the move (5-Day Hold). Upward trend = Mean Reversion works.")
+
+             # 4. Tail Risk Histogram
+             if 'histogram' in ui_figs:
+                 st.plotly_chart(ui_figs['histogram'], width="stretch", key="ai_hist_persist")
+                 st.caption("Distribution of Earnings Returns. Bars usually exceed the white dashed line (Normal Curve) at the edges, indicating 'Fat Tails' (Extreme Events).")
+
+             # --- Download Button (Conditional) ---
+             file_name_base = f"{saved_stock}_AI_Report_{saved_agent.replace(' ', '_')}_{pd.Timestamp.now().strftime('%Y%m%d')}"
+             
+             if report_format == "PDF":
+                  from utils.pdf_gen import create_pdf_report
+                  pdf_bytes = create_pdf_report(report, raw_pdf_images)
+                  st.download_button(
+                     label="📥 Download PDF Report",
+                     data=pdf_bytes,
+                     file_name=f"{file_name_base}.pdf",
+                     mime="application/pdf",
+                 )
+             else:
+                 st.download_button(
+                     label="📥 Download MD Report",
+                     data=report,
+                     file_name=f"{file_name_base}.md",
+                     mime="text/markdown",
+                 )
 
 
 
