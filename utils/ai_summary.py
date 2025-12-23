@@ -2,7 +2,7 @@ import google.generativeai as genai
 import streamlit as st
 import pandas as pd
 import numpy as np
-from utils.calculations import calculate_beta_trends, interpret_volatility_ramp, analyze_post_event_drift, calculate_fade_strategy
+from utils.calculations import calculate_beta_trends, interpret_volatility_ramp, analyze_post_event_drift, calculate_fade_strategy, calculate_factor_contribution, calculate_factor_crowding
 
 # --- AI Model Helper ---
 @st.cache_data
@@ -25,7 +25,15 @@ AGENT_PROMPTS = {
     "Risk Manager 🛡️": """
     You are a conservative Chief Risk QUANT (CRO). Your job is to provide insights on how a stock performs and behaves around earnings announcements, both in terms of returns and volatility.
     
-    PRIMARY OBJECTIVE: Utilize Quarterly Earnings Dates and Equity Factor Returns to explore how the stock performs and behaves around earnings announcements, both in terms of Returns and Volatility.
+    **CRITICAL INSTRUCTION FOR VISUALS:**
+    You must include specific PLACEHOLDER TAGS (e.g., [[IMAGE:vol_ramp]]) in your output. These tags are used by the reporting engine to insert charts. 
+    - Do NOT describe the chart vaguely ("As seen in the chart...").
+    - DO insert the exact tag [[IMAGE:key]] on its own line where the visual proof should go.
+    - Follow the structure below EXACTLY.
+
+    **OBJECTIVE:**
+    Analyze the provided data (Earnings Returns, Factor Loadings, Volatility). Identify systematic vs. idiosyncratic risks.
+    stock performs and behaves around earnings announcements, both in terms of Returns and Volatility.
     
     CRITICAL INTERPRETATION GUIDELINES:
     1. Win Rate vs Magnitude: A ~60% win rate is a coin flip. Focus on MAGNITUDE risk. If the stock drops 8-10%, that wipes out weeks of alpha. That is the risk.
@@ -49,8 +57,15 @@ AGENT_PROMPTS = {
     2. Earnings Behavior Analysis (Deep Dive)
         - Intraday Reaction: Win Rate & Asymmetry (Upside vs Downside Skew)
         - Volatility Dynamics: The "Fear Cycle" (Ramp up vs Crush down)
+        [[IMAGE:vol_ramp]]
         - Drift Profile: Do moves sustain or reverse in days T+2 to T+5?
-    3. Factor Ecosystem Deep Dive (Exposure & Crowding)
+
+    2.1 Factor Drivers & Crowding Risks (CRITICAL NEW SECTION)
+        - Dominant Factor Drivers: Use "Systematic Risk Breakdown" to explain the "Why". (e.g. "Semiconductors explain 70% of variance").
+        - Factor Crowding Risk: Use "Factor Crowding / Z-Scores". Warn if > 2.0 Sigma. (e.g. "Growth loading is 2.5 sigma above average").
+        - Hedging Dislocation ("Factor Betrayal"): EXPLICITLY reference the "Factor Betrayal Table". Compare Normal vs Earnings Correlation. (e.g. "Correlation drops from 0.85 to 0.12, rendering hedges ineffective").
+
+    3. Factor Ecosystem Deep Dive (Legacy/Broader context)
         - Current Exposures: Top drivers (Positive/Negative).
         - Factor Rotation: Are we fighting macro headwinds? (Factor Drag).
         - Beta Trends: Is the stock becoming "More Systematic" or "More Idiosyncratic"?
@@ -120,6 +135,26 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     # Beta Trends (Slope over 10, 30, 60 days)
     # Beta Trends (REFACTORED)
     beta_trends = calculate_beta_trends(rolling_stats)
+
+    # --- NEW: Deep Factor Analysis ---
+    # 1. Factor Contribution (Variance Breakdown)
+    contrib_dict = calculate_factor_contribution(full_df, loadings_df, factor_cols)
+    if contrib_dict:
+        sorted_contrib = sorted(contrib_dict.items(), key=lambda x: x[1], reverse=True)
+        factor_contrib_str = ", ".join([f"{k} {v:.0%}" for k, v in sorted_contrib])
+    else:
+        factor_contrib_str = "Data Not Available"
+
+    # 2. Factor Crowding (Z-Scores)
+    crowding_dict = calculate_factor_crowding(loadings_df, factor_cols)
+    crowding_alerts = []
+    if crowding_dict:
+        for f, z in crowding_dict.items():
+            if abs(z) > 1.5:
+                status = "CROWDED/STRETCHED" if z > 0 else "OVERSOLD/UNLOVED"
+                crowding_alerts.append(f"{f}: {z:.2f} Sigma ({status})")
+    
+    crowding_str = "; ".join(crowding_alerts) if crowding_alerts else "No extreme crowding detected (All factors within 1.5 sigma)."
     
     # 3. Risk Decomposition
     window_60 = full_df.iloc[-60:].copy()
@@ -494,6 +529,8 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     - Top Positive Loadings: {', '.join(top_3_pos)}
     - Top Negative Loadings: {', '.join(top_3_neg)}
     - Beta Trends: {', '.join(beta_trends)}
+    - **Systematic Risk Breakdown (Variance Contrib):** {factor_contrib_str}
+    - **Factor Crowding / Z-Scores:** {crowding_str}
 
     3. Risk Decomposition
     - Annualized Volatility: {total_vol:.1%}
@@ -506,6 +543,7 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     {vol_ramp_str}
 
     **Factor Betrayal Table (Correlation Breakdown):**
+    [[IMAGE:vol_comp]]
     {betrayal_table_str}
 
     **3. RISK & BEHAVIORAL PROFILE (DEEP DIVE):**
@@ -515,6 +553,7 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     - **Factor Environment:** {factor_context}
     
     **4. TACTICAL TRADING IMPLICATIONS:**
+    [[IMAGE:equity]]
     {strategy_str}
 
     6. Performance Attribution (Latest Earnings Event)
@@ -522,6 +561,7 @@ def generate_ai_summary(api_key, stock_ticker, full_df, reaction_days, latest_re
     - Alpha Component: {evt_alpha:+.1%} (Remainder explained by factors)
     
     7. Event Risk & Earnings Diagnostics
+    [[IMAGE:histogram]]
     - Implied Move vs Realized: Realized move was {sigma:.1f} Standard Deviations (Sigma).
     
     8. Scenario Analysis (Hypothetical P&L Impact)

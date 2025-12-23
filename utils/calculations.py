@@ -373,3 +373,95 @@ def analyze_post_event_drift(combined_events, stock_ticker):
                 if np.isnan(drift_corr): drift_corr = 0.0
                 
     return drift_str, drift_corr
+
+@st.cache_data
+def calculate_factor_contribution(full_df, loadings_df, factor_cols):
+    """
+    Calculates the percentage contribution of each factor to the total SYSTEMATIC variance.
+    Returns a dictionary: {Factor: Contribution_Pct}
+    """
+    contrib_dict = {}
+    try:
+        # Merge Returns and Loadings on Date
+        # full_df has returns (e.g. 'Momentum'), loadings_df has 'Momentum' or 'Momentum_Load'
+        # We need to align them carefully.
+        
+        # 1. Clean Dataframes
+        # Ensure Date index alignment
+        returns = full_df.copy().set_index('Date').sort_index()
+        loadings = loadings_df.copy().set_index('Date').sort_index()
+        
+        # Intersect dates
+        common_dates = returns.index.intersection(loadings.index)
+        if len(common_dates) < 30: # Need some history
+            return {}
+            
+        returns = returns.loc[common_dates]
+        loadings = loadings.loc[common_dates]
+        
+        var_contribs = {}
+        
+        for f in factor_cols:
+            # Find Return Col (Try base, then _Ret)
+            ret_col = f
+            if f not in returns.columns:
+                 if f"{f}_Ret" in returns.columns:
+                     ret_col = f"{f}_Ret"
+            
+            # Find Loading Col
+            load_col = f
+            if f not in loadings.columns:
+                load_col = f"{f}_Load"
+                
+            if ret_col in returns.columns and load_col in loadings.columns:
+                # Calculate Component Return: Beta(t) * FactorRet(t)
+                component_ret = loadings[load_col] * returns[ret_col]
+                # Variance of this component
+                var_contribs[f] = component_ret.var()
+                
+        total_sys_var = sum(var_contribs.values())
+        
+        if total_sys_var > 0:
+            for f, v in var_contribs.items():
+                contrib_dict[f] = v / total_sys_var
+                
+    except Exception as e:
+        return {}
+        
+    return contrib_dict
+
+@st.cache_data
+def calculate_factor_crowding(loadings_df, factor_cols):
+    """
+    Calculates the Z-Score of the current factor loadings vs their historical average (Crowding).
+    Returns a dictionary: {Factor: Z_Score}
+    """
+    crowding_dict = {}
+    try:
+        df = loadings_df.copy().sort_values('Date').set_index('Date')
+        
+        for f in factor_cols:
+            col = f
+            if f not in df.columns:
+                col = f"{f}_Load"
+            
+            if col in df.columns:
+                series = df[col]
+                if len(series) > 30:
+                    # Use rolling window (e.g. 1 year / 252 days) or expanding if shorter
+                    window = 252
+                    
+                    # Current Value
+                    current_val = series.iloc[-1]
+                    
+                    # Historical Stats (excluding current if possible, or usually just rolling includes current)
+                    mean = series.rolling(window, min_periods=30).mean().iloc[-1]
+                    std = series.rolling(window, min_periods=30).std().iloc[-1]
+                    
+                    if std > 0:
+                        z_score = (current_val - mean) / std
+                        crowding_dict[f] = z_score
+    except Exception as e:
+        return {}
+        
+    return crowding_dict

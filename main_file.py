@@ -902,7 +902,10 @@ def main():
 
                         # --- Multi-Modal Image Prep ---
                         ai_images = []
-                        raw_pdf_images = [] # For PDF generation
+                        # pdf_images_dict replaces raw_pdf_images
+                        pdf_images_dict = {} 
+                        # Default hold days
+                        algo_days = 5
                         
                         # Store figures for UI rendering
                         ui_figs = {}
@@ -926,11 +929,11 @@ def main():
                                 # Convert to Image for AI (PIL) and PDF (Bytes)
                                 img_bytes_ramp = fig_ramp_ai.to_image(format="png", width=800, height=400)
                                 ai_images.append(Image.open(io.BytesIO(img_bytes_ramp)))
-                                raw_pdf_images.append(img_bytes_ramp)
+                                pdf_images_dict['vol_ramp'] = img_bytes_ramp
                                 
                                 img_bytes_comp = fig_comp_ai.to_image(format="png", width=800, height=400)
                                 ai_images.append(Image.open(io.BytesIO(img_bytes_comp)))
-                                raw_pdf_images.append(img_bytes_comp)
+                                pdf_images_dict['vol_comp'] = img_bytes_comp
                                 
                             if not ai_reaction.empty:
                                 fig_betrayal_ai = px.scatter(ai_reaction, x='Factor_Return', y=selected_stock, title="Factor Betrayal")
@@ -943,7 +946,7 @@ def main():
                                 
                                 img_bytes_betrayal = fig_betrayal_ai.to_image(format="png", width=800, height=400)
                                 ai_images.append(Image.open(io.BytesIO(img_bytes_betrayal)))
-                                raw_pdf_images.append(img_bytes_betrayal)
+                                pdf_images_dict['betrayal'] = img_bytes_betrayal
 
                             # 3. Strategy Backtest Curve (New)
                             from utils.calculations import calculate_fade_strategy
@@ -966,7 +969,7 @@ def main():
                                 
                                 img_bytes_eq = fig_eq_ai.to_image(format="png", width=800, height=400)
                                 ai_images.append(Image.open(io.BytesIO(img_bytes_eq)))
-                                raw_pdf_images.append(img_bytes_eq)
+                                pdf_images_dict['equity'] = img_bytes_eq
                                 
                             # 4. Earnings Distribution (Tail Risk) - NEW
                             from utils.visualizations import plot_earnings_histogram
@@ -983,7 +986,7 @@ def main():
                             fig_hist_white.update_layout(template="plotly_white")
                             img_bytes_hist = fig_hist_white.to_image(format="png", width=800, height=400)
                             ai_images.append(Image.open(io.BytesIO(img_bytes_hist)))
-                            raw_pdf_images.append(img_bytes_hist)
+                            pdf_images_dict['histogram'] = img_bytes_hist
                                 
                         except Exception as e:
                             st.warning(f"Could not prepare images for AI (Is kaleido installed?): {e}")
@@ -1009,7 +1012,7 @@ def main():
                         # save to session state
                         st.session_state['ai_report_content'] = report
                         st.session_state['ai_report_usage'] = usage
-                        st.session_state['ai_report_images'] = raw_pdf_images
+                        st.session_state['ai_report_images'] = pdf_images_dict
                         st.session_state['ai_report_figs'] = ui_figs
                         st.session_state['ai_report_agent'] = selected_agent
                         st.session_state['ai_report_stock'] = selected_stock
@@ -1022,7 +1025,19 @@ def main():
              report = st.session_state['ai_report_content']
              usage = st.session_state.get('ai_report_usage', {})
              ui_figs = st.session_state.get('ai_report_figs', {})
-             raw_pdf_images = st.session_state.get('ai_report_images', [])
+             usage = st.session_state.get('ai_report_usage', {})
+             ui_figs = st.session_state.get('ai_report_figs', {})
+             
+             # ROBUSTNESS FIX: Check if stored images are list (old state) or dict (new state)
+             img_store = st.session_state.get('ai_report_images', {})
+             if isinstance(img_store, list):
+                 # Convert old list to dict with dummy keys to prevent crash, or just empty it
+                 # Best to just warn and use empty so user regenerates
+                 pdf_images_dict = {}
+                 st.warning("State Format Changed: Please 'Generate Report' again to enable PDF charts.")
+             else:
+                 pdf_images_dict = img_store
+                 
              saved_agent = st.session_state.get('ai_report_agent', selected_agent)
              saved_stock = st.session_state.get('ai_report_stock', selected_stock)
              
@@ -1035,7 +1050,12 @@ def main():
                  u_col2.caption(f"Output Tokens: {usage.get('candidates_tokens', 0)}")
                  u_col3.caption(f"Total Tokens: {usage.get('total_tokens', 0)}")
              
-             st.markdown(report)
+             # Clean Report for UI (Remove [[IMAGE:key]] tags)
+             import re
+             # Remove lines containing only the tag, or just the tag itself
+             report_ui = re.sub(r'\[\[IMAGE:.*?\]\]', '', report)
+             
+             st.markdown(report_ui)
              st.success("Generation Complete.")
              
              # --- Supporting Visual Evidence (New) ---
@@ -1070,7 +1090,7 @@ def main():
              
              if report_format == "PDF":
                   from utils.pdf_gen import create_pdf_report
-                  pdf_bytes = create_pdf_report(report, raw_pdf_images)
+                  pdf_bytes = create_pdf_report(report, pdf_images_dict)
                   st.download_button(
                      label="📥 Download PDF Report",
                      data=pdf_bytes,
